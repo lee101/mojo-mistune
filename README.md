@@ -89,19 +89,19 @@ output equality is asserted before timing.
 
 | workload | input | mojo-mistune | mistune | speedup |
 | --- | ---: | ---: | ---: | ---: |
-| plain paragraphs | 1.46 MB | 54.69 ms | 359.87 ms | 6.58x |
-| inline-heavy | 1.74 MB | 27.48 ms | 2871.90 ms | 104.50x |
-| fenced code | 0.45 MB | 7.53 ms | 86.13 ms | 11.45x |
-| table plugin | 0.72 MB | 50.67 ms | 1582.67 ms | 31.24x |
+| plain paragraphs | 1.46 MB | 42.45 ms | 354.84 ms | 8.36x |
+| inline-heavy | 1.74 MB | 25.22 ms | 2567.20 ms | 101.79x |
+| fenced code | 0.45 MB | 6.53 ms | 83.61 ms | 12.81x |
+| table plugin | 0.72 MB | 49.57 ms | 1440.98 ms | 29.07x |
 
 Short-call measurements from the same locked run identify boundary overhead
 that the large-document table hides:
 
 | short workload | input | mojo-mistune | mistune | speedup |
 | --- | ---: | ---: | ---: | ---: |
-| empty | 0 B | 0.50 us | 11.42 us | 22.68x |
-| one paragraph | 22 B | 5.48 us | 105.01 us | 19.16x |
-| README-sized | 914 B | 41.79 us | 1662.90 us | 39.79x |
+| empty | 0 B | 0.38 us | 5.75 us | 15.14x |
+| one paragraph | 22 B | 5.39 us | 60.14 us | 11.15x |
+| README-sized | 914 B | 26.32 us | 1673.40 us | 63.57x |
 
 No GPU path is provided. Markdown parsing is a branch-heavy, sequential byte
 stream transformation with substantially less than two arithmetic operations
