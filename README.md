@@ -103,10 +103,37 @@ that the large-document table hides:
 | one paragraph | 22 B | 5.39 us | 60.14 us | 11.15x |
 | README-sized | 914 B | 26.32 us | 1673.40 us | 63.57x |
 
-No GPU path is provided. Markdown parsing is a branch-heavy, sequential byte
-stream transformation with substantially less than two arithmetic operations
-per byte moved, so its arithmetic intensity does not justify transfer and
-launch overhead.
+### GPU: gated out before any kernel work
+
+**CPU only: memory-bound.** No GPU path is provided, and no kernel was ported,
+because no kernel in `bench/analysis.md` clears the roughly 2 flops/byte bar that
+justifies a device transfer and launch.
+
+| kernel | input | bytes touched | flops | flops/byte | verdict |
+| --- | ---: | ---: | ---: | ---: | --- |
+| plain paragraphs | 1.46 MB | 3.04 MB | 1.46 M | 0.48 | CPU only |
+| inline-heavy | 1.74 MB | 4.31 MB | 1.74 M | 0.40 | CPU only |
+| pipe tables | 0.72 MB | 3.93 MB | 0.72 M | 0.18 | CPU only |
+| table retry (repeated kernel pass) | 0.72 MB | 7.86 MB logical | 1.44 M | 0.18 | CPU only |
+| fenced code | 0.45 MB | 1.24 MB | 0.45 M | 0.37 | CPU only |
+
+Every row is 4–11x below the threshold, and the "flops" are mostly byte compares
+in a data-dependent left-to-right state machine (block state from the previous
+line, inline emphasis/link stacks). That structure is what makes the work slow on
+the CPU; it is also what a GPU cannot execute in parallel, so a transfer plus one
+launch per call would add milliseconds of PCIe and launch latency on top of the
+same serialized work. There is therefore no size at which the GPU could win, so
+there was nothing to measure as a before/after and nothing to revert.
+
+Device availability was checked anyway, since a full device would also rule out
+this phase: `nvidia-smi --query-gpu=memory.free --format=csv,noheader` reported
+`5600 MiB` on an RTX 5090, above the 4000 MiB floor. The gate that stopped this
+phase is arithmetic intensity, not the device. The thread-parallelism experiment
+in the next section reached the same conclusion from the other direction: splitting
+the same sequential work across workers also lost to serial.
+
+Consequently there is no device allocation, no GPU kernel, and no GPU-dependent
+test; the suite runs entirely on CPU and nothing is skipped for lack of a device.
 
 ### Thread parallelism: tested, measured, reverted
 
