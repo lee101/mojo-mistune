@@ -759,6 +759,32 @@ def table_row_bounds(src: BPtr, start: Int, end: Int) -> Tuple[Int, Int]:
     return Tuple(a, b)
 
 
+def text_cells(src: BPtr, start: Int, end: Int) -> Int:
+    """Cell count of a row with no inline markup, or -1 if it may have some.
+
+    A plain text cell can only end at one of these bytes, so a row without any
+    of them is counted by its separators alone and the per-cell rescans in
+    render_table_row collapse to one call per row.
+    """
+    var bounds = table_row_bounds(src, start, end)
+    var a = bounds[0]
+    var b = bounds[1]
+    var count = 1
+    var text_only = True
+    for i in range(a, b):
+        var c = src[i]
+        if c == UInt8(124):
+            if i == a or src[i - 1] != UInt8(92):
+                count += 1
+        elif (
+            c == UInt8(42) or c == UInt8(95) or c == UInt8(126)
+            or c == UInt8(96) or c == UInt8(91) or c == UInt8(60)
+            or c == UInt8(92) or c == UInt8(38)
+        ):
+            text_only = False
+    return count if text_only else -1
+
+
 def table_cell_count(src: BPtr, start: Int, end: Int) -> Int:
     var bounds = table_row_bounds(src, start, end)
     var a = bounds[0]
@@ -854,11 +880,15 @@ def render_table_row(
     delimiter_start: Int,
     delimiter_end: Int,
     columns: Int,
+    text_cells_hint: Int,
     header: Bool,
     escape_html: Bool,
     hard_wrap: Bool,
     strike: Bool,
 ):
+    var cells = text_cells_hint
+    if cells < 0:
+        cells = table_cell_count(src, start, end)
     writer.literal("<tr>\n")
     for i in range(columns):
         writer.literal("  <th" if header else "  <td")
@@ -867,7 +897,7 @@ def render_table_row(
             table_alignment(src, delimiter_start, delimiter_end, i),
         )
         writer.literal(">")
-        if i < table_cell_count(src, start, end):
+        if i < cells:
             render_inline(
                 writer,
                 src,
@@ -1068,7 +1098,7 @@ def render_document(
                 writer.literal("<table>\n<thead>\n")
                 render_table_row(
                     writer, src, pos, end, following, following_end, columns,
-                    True, escape_html, hard_wrap, strike
+                    text_cells(src, pos, end), True, escape_html, hard_wrap, strike
                 )
                 writer.literal("</thead>\n")
                 pos = next_line(src, n, following)
@@ -1079,7 +1109,8 @@ def render_document(
                         break
                     render_table_row(
                         writer, src, pos, end, following, following_end, columns,
-                        False, escape_html, hard_wrap, strike
+                        text_cells(src, pos, end), False, escape_html, hard_wrap,
+                        strike
                     )
                     pos = next_line(src, n, pos)
                 writer.literal("</tbody>\n")
