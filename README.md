@@ -106,8 +106,72 @@ that the large-document table hides:
 No GPU path is provided. Markdown parsing is a branch-heavy, sequential byte
 stream transformation with substantially less than two arithmetic operations
 per byte moved, so its arithmetic intensity does not justify transfer and
-launch overhead. The same grammar dependencies make CPU thread launch and
-output stitching more expensive than serial parsing for the covered kernels.
+launch overhead.
+
+### Thread parallelism: tested, measured, reverted
+
+A parallel path was implemented and then removed. It split the document at
+blank-line boundaries (the block parser keeps no state across blocks, and
+every construct that swallows following lines — fenced code, indented code,
+raw HTML blocks — is closed by a blank line), rendered each chunk into its own
+window of the output buffer, and stitched the windows back together. Before it
+was measured it was proven byte-identical to serial output: at 1, 2, 3, 4 and
+8 workers on the four benchmark documents, plus fence-at-EOF, a 1.5 MB
+document with no blank line at all, CRLF separators and a 1.7 MB table
+document.
+
+It was reverted because it never beat serial. Kernel time for the same input
+and buffers, interleaved in one process, best of nine, under
+`/tmp/mojo-bench.lock`:
+
+| workload | input | 1 worker | 2 workers | 4 workers | 8 workers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| plain paragraphs | 1.46 MB | 22.84 ms | 25.15 ms | 25.64 ms | 25.80 ms |
+| inline-heavy | 1.74 MB | 21.97 ms | 23.84 ms | 24.26 ms | 24.64 ms |
+| fenced code | 0.45 MB | 1.80 ms | 2.50 ms | 2.51 ms | 2.47 ms |
+| table plugin | 0.72 MB | 18.31 ms | 19.27 ms | 19.58 ms | 19.06 ms |
+
+The gain flattens at zero and then reverses as workers are added; the 4-worker
+cap is already worse than serial. A size sweep of the same code found no
+crossover below that either (4 workers relative to serial, best of fifteen):
+
+| input | 1 worker (serial) | 2 workers | 4 workers |
+| ---: | ---: | ---: | ---: |
+| 1 KB | 24.6 us | 22.6 us | 23.2 us |
+| 4 KB | 82.6 us | 88.4 us | 90.0 us |
+| 18 KB | 332.0 us | 330.8 us | 332.0 us |
+| 72 KB | 1336.5 us | 1324.5 us | 1131.8 us |
+| 293 KB | 4566.6 us | 5018.7 us | 5002.0 us |
+| 1.19 MB | 18800.3 us | 21131.0 us | 21140.5 us |
+
+The apparent 72 KB win (0.85x) did not reproduce at 293 KB (1.10x) and is
+inside the ±15 % machine drift, so no threshold can be defended from it.
+
+The cause is the worker count, not the chunking. `max.algorithm.parallelize`
+on this toolchain has the signature
+`parallelize(func, num_work_items, num_workers[, ctx])`, where `ctx` is an
+`Optional[DeviceContext]` — there is no separate CPU thread-count parameter,
+so `num_workers` is the only knob and it does not produce parallel execution
+here. A native-build probe (not JIT) holds this with no parser involved:
+
+| probe | 1 worker | 2 workers | 4 workers | 8 workers |
+| --- | ---: | ---: | ---: | ---: |
+| pure integer loop, `def(Int)` callback | 5 ms | 5 ms | 6 ms | 7 ms |
+
+Adding workers only adds dispatch cost. Under that behaviour a parallel path
+that loses to serial at every size a real caller passes is worse than no
+parallelism, so the kernel stays serial. The build, test and benchmark results
+below are from the reverted tree, unchanged from before this phase:
+
+| run | plain | inline | fenced | table |
+| --- | ---: | ---: | ---: | ---: |
+| before (start of this phase) | 34.93 ms | 23.69 ms | 7.39 ms | 40.92 ms |
+| parallel path present | 37.06 ms | 25.68 ms | 4.10 ms | 40.23 ms |
+| after revert | 35.15 ms | 23.07 ms | 3.72 ms | 39.02 ms |
+
+The first and third rows are the same serial code, so their spread is the
+machine, not the change. No threshold or worker-count constant is shipped,
+because none is earned by these measurements.
 
 These measurements favor large documents, where one FFI call amortizes the
 roughly microsecond-scale `ctypes` boundary. They do not imply the same
